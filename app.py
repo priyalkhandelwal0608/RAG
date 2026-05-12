@@ -1,26 +1,32 @@
 import streamlit as st
 from langchain.text_splitter import CharacterTextSplitter
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.vectorstores import FAISS
-from langchain.llms import Ollama
+
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain_community.llms import Ollama
 
 # -----------------------------
 # Page Config
 # -----------------------------
-st.set_page_config(page_title="RAG Chatbot", layout="wide")
+st.set_page_config(
+    page_title="RAG Chatbot",
+    layout="wide"
+)
 
 # -----------------------------
-# Custom CSS (UI)
+# Custom CSS
 # -----------------------------
 st.markdown("""
 <style>
-body {
+
+.main {
     background: linear-gradient(135deg, #1e1e2f, #2b2b45);
     color: white;
 }
 
 h1 {
     text-align: center;
+    color: white;
 }
 
 .upload-box {
@@ -29,6 +35,7 @@ h1 {
     border-radius: 15px;
     text-align: center;
     background: rgba(255,255,255,0.05);
+    margin-bottom: 20px;
 }
 
 .chat-user {
@@ -50,107 +57,181 @@ h1 {
     width: fit-content;
     max-width: 70%;
 }
+
+.stTextInput input {
+    border-radius: 10px;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
 # -----------------------------
 # Title
 # -----------------------------
-st.markdown("<h1>🤖 RAG Document Chatbot</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align:center;'>Upload a file and chat with it 🚀</p>", unsafe_allow_html=True)
+st.markdown(
+    "<h1>🤖 RAG Document Chatbot</h1>",
+    unsafe_allow_html=True
+)
+
+st.markdown(
+    "<p style='text-align:center;'>Upload a TXT file and chat with it 🚀</p>",
+    unsafe_allow_html=True
+)
 
 # -----------------------------
-# Upload Section
+# Upload UI
 # -----------------------------
-st.markdown("<div class='upload-box'>📂 Upload your .txt file</div>", unsafe_allow_html=True)
-uploaded_file = st.file_uploader("", type="txt")
+st.markdown(
+    "<div class='upload-box'>📂 Upload your .txt document</div>",
+    unsafe_allow_html=True
+)
 
-if uploaded_file:
+uploaded_file = st.file_uploader(
+    "Upload TXT File",
+    type=["txt"],
+    label_visibility="collapsed"
+)
 
+# -----------------------------
+# Chat History
+# -----------------------------
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+
+# -----------------------------
+# File Processing
+# -----------------------------
+if uploaded_file is not None:
+
+    # Read file
     text = uploaded_file.read().decode("utf-8")
 
     # -----------------------------
-    # Split Text
+    # Text Splitter
     # -----------------------------
-    splitter = CharacterTextSplitter(chunk_size=300, chunk_overlap=50)
+    splitter = CharacterTextSplitter(
+        separator="\n",
+        chunk_size=300,
+        chunk_overlap=50
+    )
+
     docs = splitter.split_text(text)
 
     # -----------------------------
-    # Embeddings + FAISS
+    # Embeddings
     # -----------------------------
     embeddings = HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2"
     )
 
+    # -----------------------------
+    # FAISS Vector Store
+    # -----------------------------
     vectorstore = FAISS.from_texts(docs, embeddings)
 
     # -----------------------------
-    # Load LLM (Ollama)
+    # Ollama LLM
     # -----------------------------
     llm = Ollama(model="llama3")
 
-    st.success("✅ File uploaded & processed!")
+    st.success("✅ File uploaded and processed successfully!")
 
     # -----------------------------
-    # Chat History
+    # User Prompt
     # -----------------------------
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
+    prompt = st.text_input(
+        "💬 Ask something about your document..."
+    )
 
     # -----------------------------
-    # Prompt Input
+    # Send Button
     # -----------------------------
-    prompt = st.text_input("💬 Ask something about your document...")
-
     if st.button("🚀 Send") and prompt:
 
         # -----------------------------
-        # Similarity Search with Score
+        # Similarity Search
         # -----------------------------
-        docs_with_scores = vectorstore.similarity_search_with_score(prompt, k=3)
-
-        # Filter relevant docs
-        relevant_docs = [doc for doc, score in docs_with_scores if score < 0.7]
+        docs_with_scores = vectorstore.similarity_search_with_score(
+            prompt,
+            k=3
+        )
 
         # -----------------------------
-        # If nothing relevant → No hallucination
+        # Filter Relevant Docs
+        # -----------------------------
+        relevant_docs = [
+            doc for doc, score in docs_with_scores
+            if score < 1.5
+        ]
+
+        # -----------------------------
+        # No Relevant Info
         # -----------------------------
         if len(relevant_docs) == 0:
-            response = "❌ Information not found in the uploaded document."
-        else:
-            context = "\n\n".join([doc.page_content for doc in relevant_docs])
 
+            response = "❌ Information not found in the uploaded document."
+
+        else:
+
+            # Combine Context
+            context = "\n\n".join(
+                [doc.page_content for doc in relevant_docs]
+            )
+
+            # -----------------------------
+            # Final Prompt
+            # -----------------------------
             final_prompt = f"""
 You are a strict AI assistant.
 
 Rules:
-- Answer ONLY from the context
-- If answer is not clearly present, say "Information not found"
-- Do NOT guess or add extra info
+- Answer ONLY from the given context
+- If answer is not present, say:
+  "Information not found in document"
+- Do NOT hallucinate
+- Keep answers concise
 
 Context:
 {context}
 
-User:
+User Question:
 {prompt}
 
 Answer:
 """
 
-            response = llm(final_prompt)
+            # Generate Response
+            response = llm.invoke(final_prompt)
 
-            # Limit length
+            # Limit Response Length
             response = " ".join(response.split()[:200])
 
-        # Save chat
-        st.session_state.chat_history.append(("user", prompt))
-        st.session_state.chat_history.append(("ai", response))
+        # -----------------------------
+        # Save Chat
+        # -----------------------------
+        st.session_state.chat_history.append(
+            ("user", prompt)
+        )
 
-    # -----------------------------
-    # Chat Display (Bubbles)
-    # -----------------------------
-    for role, msg in st.session_state.chat_history:
-        if role == "user":
-            st.markdown(f"<div class='chat-user'>🧑 {msg}</div>", unsafe_allow_html=True)
-        else:
-            st.markdown(f"<div class='chat-ai'>🤖 {msg}</div>", unsafe_allow_html=True)
+        st.session_state.chat_history.append(
+            ("ai", response)
+        )
+
+# -----------------------------
+# Display Chat
+# -----------------------------
+for role, message in st.session_state.chat_history:
+
+    if role == "user":
+
+        st.markdown(
+            f"<div class='chat-user'>🧑 {message}</div>",
+            unsafe_allow_html=True
+        )
+
+    else:
+
+        st.markdown(
+            f"<div class='chat-ai'>🤖 {message}</div>",
+            unsafe_allow_html=True
+        )
